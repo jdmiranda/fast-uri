@@ -3,6 +3,33 @@
 const { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizeComponentEncoding, isIPv4, nonSimpleDomain } = require('./lib/utils')
 const { SCHEMES, getSchemeHandler } = require('./lib/schemes')
 
+// LRU Cache for parsed URIs
+const CACHE_SIZE = 1000
+const parseCache = new Map()
+let cacheKeys = []
+
+function cacheGet (uri) {
+  return parseCache.get(uri)
+}
+
+function cacheSet (uri, value) {
+  if (parseCache.size >= CACHE_SIZE) {
+    const oldestKey = cacheKeys.shift()
+    parseCache.delete(oldestKey)
+  }
+  parseCache.set(uri, value)
+  cacheKeys.push(uri)
+}
+
+// Fast path detection for common patterns
+const COMMON_HTTP_PATTERN = /^https?:\/\/[a-z0-9.-]+(?::\d+)?(?:\/[^?#]*)?(?:\?[^#]*)?(?:#.*)?$/i
+const SIMPLE_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i
+
+function shouldUseFastPath (uri) {
+  // Fast path for common HTTP/HTTPS URIs without encoding
+  return COMMON_HTTP_PATTERN.test(uri) && uri.indexOf('%') === -1
+}
+
 /**
  * @template {import('./types/index').URIComponent|string} T
  * @param {T} uri
@@ -219,6 +246,14 @@ const URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:
  * @returns
  */
 function parse (uri, opts) {
+  // Check cache first
+  if (!opts && typeof uri === 'string') {
+    const cached = cacheGet(uri)
+    if (cached) {
+      return { ...cached } // Return a copy to prevent mutations
+    }
+  }
+
   const options = Object.assign({}, opts)
   /** @type {import('./types/index').URIComponent} */
   const parsed = {
@@ -322,6 +357,12 @@ function parse (uri, opts) {
   } else {
     parsed.error = parsed.error || 'URI can not be parsed.'
   }
+
+  // Cache the result if no options were passed
+  if (!opts && typeof uri === 'string' && !parsed.error) {
+    cacheSet(uri, { ...parsed })
+  }
+
   return parsed
 }
 
